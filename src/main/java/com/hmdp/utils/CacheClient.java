@@ -150,9 +150,6 @@ public class CacheClient {
 
     /**
      * 获取锁
-     *
-     * @param key 关键
-     * @return boolean
      */
     private boolean tryLock(String key) {
         Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS);
@@ -161,8 +158,6 @@ public class CacheClient {
 
     /**
      * 释放锁
-     *
-     * @param key 关键
      */
     private void unLock(String key) {
         stringRedisTemplate.delete(key);
