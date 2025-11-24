@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.VoucherOrder;
@@ -8,9 +9,11 @@ import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.service.IVoucherService;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.UserHolder;
 import org.jetbrains.annotations.NotNull;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,7 +41,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private ISeckillVoucherService seckillVoucherService;
 
     @Override
-    @Transactional
     public Result seckillVoucher(Long voucherId) {
         // 1、查询秒杀券
         SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
@@ -54,12 +56,32 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (voucher.getStock() < 1) {
             return Result.fail("秒杀券已抢空");
         }
+
+        Long userId = UserHolder.getUser().getId();
+        synchronized (userId.toString().intern()) {
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+    }
+
+    @Transactional
+    public Result createVoucherOrder(Long voucherId) {
+        // 一人一单
+        Long userId = UserHolder.getUser().getId();
+        // a 查询订单
+        Long count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
+        // b 判断是否存在
+        if (count > 0) {
+            // 用户已经下单过
+            return Result.fail("用户已经购买过一次");
+        }
+
         // 5、秒杀券合法，则秒杀券抢购成功，秒杀券库存数量减一
         boolean flag = seckillVoucherService.update(new LambdaUpdateWrapper<SeckillVoucher>()
                 .eq(SeckillVoucher::getVoucherId, voucherId)
                 .gt(SeckillVoucher::getStock, 0)
                 .setSql("stock = stock -1"));
-        if (!flag){
+        if (!flag) {
             throw new RuntimeException("秒杀券扣减失败");
         }
         // 6、秒杀成功，创建对应的订单，并保存到数据库
@@ -68,12 +90,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         long orderId = redisIdWorker.nextId("order");
         voucherOrder.setId(orderId);
         // 用户id
-        voucherOrder.setUserId(UserHolder.getUser().getId());
+        voucherOrder.setUserId(userId);
         // 代金券id
         voucherOrder.setVoucherId(voucherId);
         save(voucherOrder);
 
-        if (!flag){
+        if (!flag) {
             throw new RuntimeException("创建秒杀券订单失败");
         }
         // 返回订单id
